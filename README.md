@@ -1,159 +1,333 @@
 # CIFAR-10 Object Recognition with a Convolutional Neural Network
 
-A from-scratch convolutional neural network that classifies **CIFAR-10** images — 32×32 RGB photographs across 10 object categories — built with **TensorFlow / Keras**. No transfer learning, no pre-trained weights: the model is trained end to end.
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![TensorFlow](https://img.shields.io/badge/TensorFlow-2.13--2.16-orange.svg)](https://www.tensorflow.org/)
+[![Jupyter](https://img.shields.io/badge/Jupyter-Notebook-F37626.svg)](https://jupyter.org/)
+[![Test Accuracy](https://img.shields.io/badge/test%20accuracy-82.41%25-brightgreen.svg)](#results)
+[![Top-3 Accuracy](https://img.shields.io/badge/top--3%20accuracy-96.43%25-brightgreen.svg)](#results)
 
-The project is packaged as a small, installable Python library (`cifar10_cnn/`) with a command-line entry point per stage (**train · evaluate · predict**), a full `tf.data` input pipeline, on-the-fly image augmentation, callback-driven training, and a TensorFlow-free metrics layer so the analysis code can be unit-tested cheaply. It also ships as a single self-contained notebook for anyone who prefers to run everything interactively.
+A complete, from-scratch **convolutional neural network** that classifies CIFAR-10 images (32×32 RGB) into 10 object categories. The entire pipeline — data loading, splitting, `tf.data` construction, augmentation, model definition, training, evaluation and single-image inference — lives in one self-contained Jupyter notebook with TensorFlow/Keras. No transfer learning, no pretrained weights, no local package imports.
 
-| | |
-|---|---|
-| **Task** | 10-class image classification |
-| **Dataset** | CIFAR-10 (60,000 images, 50k train / 10k test) |
-| **Input** | 32 × 32 × 3 RGB |
-| **Model** | 3-stage CNN, ~815k trainable parameters |
-| **Framework** | TensorFlow 2.15 / Keras |
-| **Test suite** | 68 tests, all passing |
+**Pipeline:** `load → split → tf.data → augment → build model → train → evaluate → predict`
+
+Trained on 45,000 images, validated on 5,000 and evaluated on the untouched 10,000-image test set, this model reaches **82.41 % top-1 accuracy** and **96.43 % top-3 accuracy**.
 
 ---
 
 ## Table of Contents
 
-- [Highlights](#highlights)
+- [Overview](#overview)
+- [Results](#results)
 - [Dataset](#dataset)
+- [Notebook Walkthrough](#notebook-walkthrough)
 - [Model Architecture](#model-architecture)
 - [Training Configuration](#training-configuration)
-- [Project Structure](#project-structure)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Usage](#usage)
-  - [Command line](#command-line)
-  - [Python API](#python-api)
-  - [Notebook](#notebook)
+- [Data Augmentation](#data-augmentation)
+- [Callbacks](#callbacks)
+- [Evaluation Metrics](#evaluation-metrics)
 - [Output Artifacts](#output-artifacts)
-- [Configuration Reference](#configuration-reference)
-- [Testing](#testing)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+- [Usage](#usage)
 - [Reproducibility](#reproducibility)
-- [Results](#results)
-- [Design Notes](#design-notes)
-- [Roadmap](#roadmap)
+- [Notes and Next Steps](#notes-and-next-steps)
 - [License](#license)
+- [Acknowledgements](#acknowledgements)
 
 ---
 
-## Highlights
+## Overview
 
-- **From-scratch CNN** — three convolutional stages, each stacking two `Conv2D → BatchNorm → ReLU` blocks followed by max-pooling and dropout.
-- **Regularised for CPU training** — batch normalisation, L2 weight decay, a per-stage dropout schedule that grows with depth, and stochastic augmentation (flip, translate, rotate, zoom).
-- **Efficient input pipeline** — images stay `uint8` and are `cache()`d in that form (~150 MB for the whole training set); normalisation and augmentation run *after* batching so the preprocessing layers execute vectorised.
-- **Best-checkpoint selection** — `ModelCheckpoint` tracks validation accuracy (the metric of record); `EarlyStopping` and `ReduceLROnPlateau` track the smoother validation loss.
-- **Rich evaluation** — accuracy, top-3 accuracy, macro/weighted F1, per-class precision/recall/F1, a confusion matrix (counts + row-normalised), a per-class accuracy chart, and a labelled sample-prediction grid.
-- **Reproducible** — one seed drives Python, NumPy and TensorFlow; the full config is serialised next to every run.
-- **Tested** — 68 unit tests covering config, data, model, metrics, augmentation, callbacks, plots, prediction, seeding and runtime.
+This repository contains a single Jupyter notebook that builds and trains a CNN for 10-class object recognition on CIFAR-10. It is written to run end to end inside a plain Anaconda environment, and it is deliberately structured so every stage of the pipeline is readable, configurable and re-runnable.
+
+What the notebook implements:
+
+- **A configuration object, not scattered magic numbers.** Every hyperparameter lives on a `TrainConfig` dataclass (`seed`, `batch_size`, `epochs`, `learning_rate`, architecture depth, dropout schedule, augmentation strengths, callback patience, `run_name`, …). Runs are therefore described and serialised by a single object, and each run writes its own `*_config.json`.
+- **Reproducible runs.** `set_global_seed()` seeds Python, NumPy and TensorFlow, and sets `PYTHONHASHSEED` / `TF_DETERMINISTIC_OPS`.
+- **A real `tf.data` input pipeline.** Images stay `uint8` in memory, are `cache()`d, shuffled, batched, normalised to `[0, 1]` and — for training only — stochastically augmented, all vectorised inside the graph with `AUTOTUNE` parallel calls and prefetching.
+- **A 3-stage VGG-style CNN.** Each stage stacks `Conv2D → BatchNormalization → ReLU` blocks, then max-pooling and dropout, before a dense classification head.
+- **Regularisation that scales with depth.** L2 weight decay on every conv/dense kernel, batch norm throughout, and a dropout schedule that increases per stage (0.20 → 0.30 → 0.40) plus 0.50 on the dense head.
+- **Train-only augmentation.** Random horizontal flip, translation, rotation and zoom are applied through a `tf.keras.Sequential` of preprocessing layers that is active only in the training map function, so validation, test and inference are always deterministic.
+- **Production-style callbacks.** Best-checkpoint saving by validation accuracy, early stopping and learning-rate reduction on validation loss, per-epoch CSV logging and `TerminateOnNaN`.
+- **A thorough evaluation block.** Top-1 and top-3 accuracy, macro/weighted F1, per-class precision/recall/F1/support, confusion matrices in counts and row-normalised form, and mean cross-entropy computed with a TensorFlow-free NumPy implementation (needed because the model is loaded with `compile=False`).
+- **Automatic report figures.** Training curves, both confusion matrices, a per-class accuracy chart and a grid of labelled sample predictions are written to `artifacts/reports/`.
+- **Single-image inference.** Classify an image from disk or a CIFAR-10 test index, with a ranked top-k breakdown.
+- **A `quick_run` smoke-test mode.** Two epochs on a 2,000-image subset, so the whole pipeline can be verified in a couple of minutes before committing to a long run.
+
+---
+
+## Results
+
+Measured on the full 10,000-image CIFAR-10 test set with the best checkpoint from a 60-epoch run (`artifacts/reports/cifar10_cnn_metrics.json`).
+
+| Metric                     | Value            |
+| -------------------------- | ---------------- |
+| **Test accuracy (top-1)**  | **82.41 %**      |
+| **Test accuracy (top-3)**  | **96.43 %**      |
+| Macro F1                   | 0.821            |
+| Weighted F1                | 0.821            |
+| Test cross-entropy         | 0.514            |
+| Test samples               | 10,000           |
+| Best validation accuracy   | 82.48 % (epoch 60) |
+| Epochs completed           | 60 / 60          |
+| Final training accuracy    | 81.17 %          |
+
+![Training and validation curves](docs/images/cifar10_cnn_training_curves.png)
+
+Both curves rise cleanly for the full 60 epochs. The learning rate was reduced on validation-loss plateaus at epoch 24 (1e-3 → 5e-4), epoch 45 (→ 2.5e-4) and epoch 56 (→ 1.25e-4), each step producing a visible jump in both accuracy curves. Training and validation accuracy stay close together throughout, confirming that the combined augmentation + batch-norm + dropout + weight-decay regularisation keeps overfitting in check at this depth.
+
+### Per-class performance
+
+![Per-class accuracy](docs/images/cifar10_cnn_per_class_accuracy.png)
+
+| Class        | Precision | Recall | F1     | Support |
+| ------------ | --------- | ------ | ------ | ------- |
+| airplane     | 0.833     | 0.859  | 0.846  | 1000    |
+| **automobile** | 0.906   | **0.949** | **0.927** | 1000 |
+| bird         | 0.853     | 0.710  | 0.775  | 1000    |
+| cat          | 0.770     | **0.645** | 0.702 | 1000  |
+| deer         | 0.868     | 0.737  | 0.797  | 1000    |
+| dog          | 0.843     | 0.662  | 0.742  | 1000    |
+| frog         | 0.692     | 0.935  | 0.795  | 1000    |
+| horse        | 0.805     | 0.902  | 0.851  | 1000    |
+| ship         | 0.869     | 0.918  | 0.893  | 1000    |
+| truck        | 0.848     | 0.924  | 0.884  | 1000    |
+
+### Confusion matrices
+
+![Confusion matrix (counts)](docs/images/cifar10_cnn_confusion_matrix.png)
+
+![Confusion matrix (row-normalised)](docs/images/cifar10_cnn_confusion_matrix_normalized.png)
+
+The error structure is exactly what a from-scratch CIFAR-10 model is expected to show:
+
+- **Easiest classes.** `automobile` (0.949 recall), `frog` (0.935), `truck` (0.924), `ship` (0.918) and `horse` (0.902) are the classes the model separates most reliably. The vehicles and vessels (`automobile`, `truck`, `ship`) share rigid, geometric silhouettes; `frog` has an unusually uniform green texture that survives at 32×32; `horse` has a distinctive elongated body and leg pattern.
+- **Hardest classes.** `cat` (0.645), `dog` (0.662), `bird` (0.710) and `deer` (0.737) carry the recall cost. The dominant confusions are `cat ↔ dog` (78 cats read as dogs, 105 dogs read as cats), `cat → frog` (97) and `bird → frog` (104) / `deer → frog` (108), all driven by shared fur/feather texture and natural-background context at 32×32 resolution.
+- **Asymmetric precision.** `frog` has the lowest precision (0.692) even though it has the highest recall (0.935): it is a frequent false-positive home for cats, deer and birds. Symmetrically, `ship` and `airplane` are sometimes predicted as each other (46→ship, 43→airplane) because both sit on uniform blue backgrounds.
+
+### Sample predictions
+
+![Sample test predictions](docs/images/cifar10_cnn_sample_predictions.png)
+
+A 4×4 grid of test images with the predicted class and confidence, coloured green when correct and red when wrong, plus the ground-truth label beneath each.
 
 ---
 
 ## Dataset
 
-**CIFAR-10** — 60,000 labelled 32×32 colour images, split into 50,000 training and 10,000 test images across 10 mutually exclusive classes (6,000 images per class).
+**CIFAR-10** — 60,000 labelled 32×32 RGB images across 10 mutually exclusive classes, split 50,000 train / 10,000 test by the official benchmark. Keras downloads and caches it automatically on first run (`~/.keras/datasets/`), so no manual data step is required.
 
-| Index | Class        | Index | Class    |
-|-------|--------------|-------|----------|
-| 0     | `airplane`   | 5     | `dog`    |
-| 1     | `automobile` | 6     | `frog`   |
-| 2     | `bird`       | 7     | `horse`  |
-| 3     | `cat`        | 8     | `ship`   |
-| 4     | `deer`       | 9     | `truck`  |
+The notebook keeps every image as `uint8` (the whole training set fits in roughly 150 MB of RAM in that form) and normalises to `float32` in `[0, 1]` only after batching, inside the `tf.data` graph.
 
-The dataset is downloaded automatically by Keras on first use and cached under `~/.keras/datasets/`:
+| Index | Class      | Index | Class |
+| ----- | ---------- | ----- | ----- |
+| 0     | airplane   | 5     | dog   |
+| 1     | automobile | 6     | frog  |
+| 2     | bird       | 7     | horse |
+| 3     | cat        | 8     | ship  |
+| 4     | deer       | 9     | truck |
 
-```python
-from tensorflow.keras.datasets import cifar10
-(x_train, y_train), (x_test, y_test) = cifar10.load_data()
-```
+**Splits used by this run**
 
-A further **10% of the training split** is held out as a validation set (`validation_split=0.1`), leaving the 10,000-image test set untouched until final evaluation.
+| Split      | Size    | Source                                                             |
+| ---------- | ------- | ------------------------------------------------------------------ |
+| Train      | 45,000  | Official train set, 90 % after a seeded 10 % validation hold-out    |
+| Validation | 5,000   | Official train set, 10 % held out by a seeded permutation           |
+| Test       | 10,000  | Official test set, never seen during training or model selection    |
 
-Pixel values are stored as `uint8` in `[0, 255]` and scaled to `float32` in `[0, 1]` by dividing by `255.0`.
+The validation hold-out is drawn with `np.random.default_rng(seed)` so the same images land in validation on every run with `seed = 42`. `split_train_validation()` always leaves at least one training example and validates that `validation_split ∈ [0, 1)`.
+
+---
+
+## Notebook Walkthrough
+
+The notebook is organised into twelve numbered sections, designed to be executed top to bottom. Sections 1–6 are cheap (they define configuration, data and model); section 7 is the training run.
+
+| §  | Section | Contents |
+| -- | ------- | -------- |
+| 1  | Environment setup | Imports, library version printout, inline plotting |
+| 2  | Configuration | Constants, `CLASS_NAMES`, `artifacts/` layout, the `TrainConfig` dataclass |
+| 3  | Reproducibility and runtime | `set_global_seed`, UTF-8 console fix, GPU memory growth |
+| 4  | Data pipeline | Loading, train/val split, sanity-check figure, augmentation stack, `tf.data` builders |
+| 5  | Model architecture | Stage builder, `build_model`, `count_parameters`, `load_trained_model` |
+| 6  | Callbacks | Checkpoint, early stopping, LR reduction, CSV logger, NaN termination |
+| 7  | Training | `train()` end-to-end, plus a reloadable history table |
+| 8  | Metrics (TensorFlow-free) | Top-k accuracy, NumPy cross-entropy, confusion counts, summary, text formatting |
+| 9  | Report figures | Training curves, confusion matrices, per-class accuracy, sample predictions |
+| 10 | Evaluation | `run_evaluation()` on the test set, figure/metric persistence, reload of saved predictions |
+| 11 | Single-image prediction | Classify from disk or by test index, with ranked top-k output |
+| 12 | Notes and next steps | CPU/GPU guidance, smoke test, artifact locations, ablation switches |
+
+Two details worth calling out:
+
+- **Section 8 deliberately avoids TensorFlow.** Because the saved model is loaded with `compile=False` (evaluation and inference only need the forward pass, and this avoids failures when custom optimisers or legacy configs are missing), the loss/metric helpers are plain NumPy so they can be reasoned about and tested independently.
+- **Section 3 fixes a Windows-specific papercut.** Keras prints box-drawing characters in its progress output; `use_utf8_console()` reconfigures stdout/stderr to UTF-8 so these never raise `UnicodeEncodeError` on a cp1252 console.
 
 ---
 
 ## Model Architecture
 
-A `tf.keras.Sequential` model built layer-by-layer from a `TrainConfig`. It is three convolutional stages deep; each stage repeats a `Conv2D → BatchNormalization → ReLU` block, then max-pools and applies dropout.
+A `tf.keras.Sequential` built stage by stage. Each convolutional stage is `Conv2D → BatchNormalization → ReLU` repeated `conv_blocks_per_stage` times, followed by max-pooling and dropout. Convolutions use 3×3 kernels, `same` padding and `use_bias=False` (the following batch-norm layer supplies the bias). Every conv and dense kernel carries L2 weight decay (`1e-4`).
 
-| Stage | Layers |
-|-------|--------|
-| **Input** | `Input(32, 32, 3)` |
-| **Stage 1** | `Conv2D(32, 3×3, same)` → `BN` → `ReLU` ×2 → `MaxPool2D(2)` → `Dropout(0.20)` |
-| **Stage 2** | `Conv2D(64, 3×3, same)` → `BN` → `ReLU` ×2 → `MaxPool2D(2)` → `Dropout(0.30)` |
-| **Stage 3** | `Conv2D(128, 3×3, same)` → `BN` → `ReLU` ×2 → `MaxPool2D(2)` → `Dropout(0.40)` |
-| **Head** | `Flatten` → `Dense(256)` → `BN` → `ReLU` → `Dropout(0.50)` → `Dense(10, softmax)` |
+| Stage | Layer(s)                                                  | Output shape |
+| ----- | --------------------------------------------------------- | ------------ |
+| Input | —                                                         | 32×32×3      |
+| 1     | 2 × (Conv2D 32, 3×3 → BatchNorm → ReLU) → MaxPool2D 2×2 → Dropout 0.20 | 16×16×32 |
+| 2     | 2 × (Conv2D 64, 3×3 → BatchNorm → ReLU) → MaxPool2D 2×2 → Dropout 0.30 | 8×8×64   |
+| 3     | 2 × (Conv2D 128, 3×3 → BatchNorm → ReLU) → MaxPool2D 2×2 → Dropout 0.40 | 4×4×128 |
+| Head  | Flatten → Dense 256 (no bias) → BatchNorm → ReLU → Dropout 0.50 → Dense 10 Softmax | 10 |
 
-```
-Input (32, 32, 3)
-  └─ Stage 1: conv×2 @32 → pool → 16×16×32 → dropout 0.20
-  └─ Stage 2: conv×2 @64 → pool →  8×8×64  → dropout 0.30
-  └─ Stage 3: conv×2 @128→ pool →  4×4×128 → dropout 0.40
-  └─ Flatten → Dense(256) → BN → ReLU → Dropout 0.50
-  └─ Dense(10, softmax)
-```
+Roughly **0.8 M parameters** in total — the notebook prints the exact trainable/total counts with `count_parameters()` when the model is built.
 
-**Parameter counts** (default configuration):
+**Design rationale**
 
-| | Count |
-|---|---|
-| Trainable | **814,826** |
-| Non-trainable (batch-norm statistics) | 1,408 |
-| **Total** | **816,234** |
+- **Depth in stages, not one long stack.** Three stages let the network learn edges and colour blobs at 32×32, textures and parts at 16×16, and object-level structure at 8×8 and 4×4, halving spatial resolution each time.
+- **Two conv blocks per stage.** Stacking two 3×3 convolutions before pooling gives the effective receptive field of a 5×5 kernel with fewer parameters and an extra nonlinearity, and `same` padding preserves spatial dimensions within a stage.
+- **Filter depth doubles as resolution halves** (32 → 64 → 128), keeping the information bottleneck roughly constant while the representation grows more abstract.
+- **Batch normalisation after every conv and on the dense head** makes the deeper stack trainable at a higher learning rate and stabilises convergence — visible in the smooth, non-spiking loss curves.
+- **An increasing dropout schedule** (0.20 → 0.30 → 0.40) targets regularisation where the feature maps are largest and most prone to overfitting; 0.50 on the dense head guards the final 256-unit layer.
+- **L2 weight decay + dropout + augmentation** combine to keep validation accuracy tracking training accuracy instead of diverging.
+- **Softmax output** gives a proper probability distribution over the 10 classes, which is what makes the top-k and confidence reporting in section 11 meaningful.
 
-**Design rationale:**
-
-- **Progressively deeper channels (32 → 64 → 128)** keep a growing information bottleneck: spatial resolution halves at each pool while channel depth doubles, so the network learns abstract features before the classification head.
-- **Batch normalisation** after every convolution makes the deeper stack trainable at a higher learning rate and stabilises convergence.
-- **`use_bias=False` + batch norm** is redundant to bias on the conv layers, so the bias is dropped — BN's shift term replaces it.
-- **L2 weight decay** (`1e-4`) is applied to convolution and the dense head as a second regulariser alongside dropout.
-- **Dropout that increases with depth** (0.20 → 0.40) targets the layers whose feature maps are most prone to memorising the training set; the head uses a heavier 0.50.
-- **Small 3×3 kernels with `same` padding** preserve spatial size within a stage and keep the parameter count modest.
-- **Softmax output** yields a probability distribution over the 10 classes, so the argmax is the predicted label.
+The architecture is fully driven by `TrainConfig`: `conv_filters`, `conv_blocks_per_stage`, `dense_units`, `dropout_conv` and `dropout_dense` can be changed without touching the builder code. `_stage_dropouts()` pads the dropout tuple with its last value if it is shorter than the filter list, and `build_model()` raises a clear `ValueError` if `conv_filters` is empty.
 
 ---
 
 ## Training Configuration
 
-| Setting | Value |
-|---|---|
-| Loss | `sparse_categorical_crossentropy` |
-| Optimizer | `Adam` (learning rate `1e-3`) |
-| Metric | `sparse_categorical_accuracy` |
-| Batch size | 64 |
-| Epochs | 60 (with early stopping) |
-| Validation split | 0.1 |
-| Checkpoint monitor | `val_sparse_categorical_accuracy` (max) |
-| Early-stopping monitor | `val_loss` (patience 15) |
-| LR schedule | `ReduceLROnPlateau` on `val_loss` (×0.5, patience 5, min 1e-6) |
-| Weight decay | L2, `1e-4` |
+Every tunable value lives on `TrainConfig`, and each run serialises itself to `artifacts/reports/<run_name>_config.json`. The values behind the published results:
 
-Sparse categorical cross-entropy is used because the labels are integer class indices rather than one-hot vectors.
+| Parameter | Value | Notes |
+| --------- | ----- | ----- |
+| `seed` | 42 | Seeds Python, NumPy and TensorFlow |
+| `batch_size` | 64 | |
+| `epochs` | 60 | Completed in full |
+| `learning_rate` | 1e-3 | Adam, reduced automatically on plateaus |
+| `validation_split` | 0.1 | 5,000 held-out images |
+| `shuffle_buffer` | 10,000 | |
+| `conv_filters` | (32, 64, 128) | One entry per stage |
+| `conv_blocks_per_stage` | 2 | |
+| `dense_units` | 256 | |
+| `dropout_conv` | (0.20, 0.30, 0.40) | Per stage |
+| `dropout_dense` | 0.50 | |
+| `weight_decay` | 1e-4 | L2 on conv and dense kernels |
+| `use_augmentation` | True | Set `False` for a no-augmentation baseline |
+| `early_stopping_patience` | 15 | On `val_loss` |
+| `reduce_lr_patience` | 5 | On `val_loss` |
+| `reduce_lr_factor` | 0.5 | Halves the LR at each plateau |
+| `min_learning_rate` | 1e-6 | Floor for LR reduction |
+| `run_name` | `cifar10_cnn` | Prefix for every artifact filename |
+| `quick_run` | False | `True` ⇒ 2 epochs on a 2,000-image subset |
 
-Callbacks registered for every run:
+**Loss and optimiser.** Sparse categorical cross-entropy over integer class indices (the labels are `(N,)` integer arrays, not one-hot), optimised with Adam at 1e-3 and tracked by `sparse_categorical_accuracy`.
 
-| Callback | Purpose |
-|---|---|
-| `ModelCheckpoint` | Persists the best model by validation accuracy to `artifacts/models/<run>.keras`. |
-| `EarlyStopping` | Stops when `val_loss` stops improving (patience 15, `min_delta 1e-4`). |
-| `ReduceLROnPlateau` | Halves the learning rate after 5 stagnant epochs, down to `1e-6`. |
-| `CSVLogger` | Writes a per-epoch log to `artifacts/logs/<run>.csv`. |
-| `TerminateOnNaN` | Aborts immediately if the loss diverges to NaN. |
+**Learning-rate schedule actually observed.** 1e-3 for epochs 1–24, 5e-4 for 25–45, 2.5e-4 for 46–56, 1.25e-4 for 57–60 — three automatic reductions, each followed by an immediate improvement in validation accuracy.
 
-**Augmentation** (training split only — validation/test/inference are never augmented):
+| Parameter        | Value |
+| ---------------- | ----- |
+| Loss function    | `sparse_categorical_crossentropy` |
+| Optimizer        | Adam (initial LR 1e-3, plateau-reduced) |
+| Metric           | `sparse_categorical_accuracy` |
+| Input shape      | 32×32×3 |
+| Output classes   | 10 |
 
-| Transform | Factor |
-|---|---|
-| `RandomFlip` | horizontal |
-| `RandomTranslation` | ±0.125 (reflect fill) |
-| `RandomRotation` | ±0.10 (reflect fill) |
-| `RandomZoom` | ±0.10 (reflect fill) |
+---
 
-Augmentation is implemented with Keras preprocessing layers inside the training `tf.data` map, so it runs on the batch tensor and is automatically inactive at inference time.
+## Data Augmentation
+
+Augmentation is applied **only inside the training map function**, through a `tf.keras.Sequential` of Keras preprocessing layers. Validation, test and inference go through the deterministic `build_eval_dataset()` path, so reported metrics are never computed on augmented data.
+
+| Transform | Setting | Keras layer |
+| --------- | ------- | ----------- |
+| Horizontal flip | on | `RandomFlip(mode="horizontal")` |
+| Translation | 12.5 % of height/width | `RandomTranslation`, `fill_mode="reflect"` |
+| Rotation | ±10 % of 2π | `RandomRotation`, `fill_mode="reflect"` |
+| Zoom | 10 % | `RandomZoom`, `fill_mode="reflect"` |
+
+Each transform is either enabled or omitted entirely, and `build_augmentation()` returns an *empty* `tf.keras.Sequential` when augmentation is disabled — so the same code path serves both the augmented and the no-augmentation baseline. `fill_mode="reflect"` avoids introducing black borders that the network could learn to key on.
+
+For the horizontal flip this is a genuinely safe augmentation for CIFAR-10 (a mirrored truck is still a truck), while the small translation/rotation/zoom factors teach the model to tolerate the mild framing and scale variation present between object instances. Set `CONFIG.use_augmentation = False` in section 2 to reproduce a no-augmentation ablation.
+
+---
+
+## Callbacks
+
+Section 6 splits the two monitoring responsibilities deliberately: the artifact of record is chosen by the metric we care about, while the *scheduling* decisions use a smoother signal.
+
+| Callback | Monitor | Mode | Configuration |
+| -------- | ------- | ---- | ------------- |
+| `ModelCheckpoint` | `val_sparse_categorical_accuracy` | max | `save_best_only=True` → `artifacts/models/<run_name>.keras` |
+| `EarlyStopping` | `val_loss` | min | patience 15, `min_delta=1e-4` |
+| `ReduceLROnPlateau` | `val_loss` | min | factor 0.5, patience 5, `min_lr=1e-6`, `cooldown=1` |
+| `CSVLogger` | — | — | Per-epoch log → `artifacts/logs/<run_name>.csv` |
+| `TerminateOnNaN` | — | — | Aborts immediately on a NaN loss |
+
+**Why two different monitors**
+
+- **Accuracy defines the artifact.** The model that is saved is the one with the best validation *accuracy*, because that is the quantity being reported and compared.
+- **Loss drives stopping and scheduling.** Validation loss is a smoother, lower-variance signal than accuracy, so it gives a less noisy early-stopping decision and less frequent spurious LR reductions. `min_delta=1e-4` ignores the sub-noise improvements that would otherwise reset the patience counter.
+
+`restore_best_weights=False` is intentional: the best weights are already persisted to disk by `ModelCheckpoint`, so the in-memory model can keep improving (or be discarded) without the two mechanisms fighting over the same weights. Early stopping did not trigger in the published run — all 60 epochs completed, with the best checkpoint landing on the final epoch.
+
+---
+
+## Evaluation Metrics
+
+`run_evaluation()` loads the best checkpoint, predicts on the untouched test set and computes the full metric set. The model is loaded with `compile=False`, so the loss is recomputed in NumPy by `sparse_categorical_crossentropy_loss()` — deliberately TensorFlow-free so it can be reasoned about (and tested) with plain arrays.
+
+| Metric | Function | Reported value |
+| ------ | -------- | -------------- |
+| Top-1 accuracy | `sklearn.metrics.accuracy_score` | 82.41 % |
+| Top-3 accuracy | `top_k_accuracy(..., k=3)` | 96.43 % |
+| Macro F1 | `classification_report` (macro avg) | 0.821 |
+| Weighted F1 | `classification_report` (weighted avg) | 0.821 |
+| Per-class precision / recall / F1 / support | `classification_report` (per class) | see [Results](#results) |
+| Mean cross-entropy | `sparse_categorical_crossentropy_loss` | 0.514 |
+| Confusion matrix (counts) | `sklearn.metrics.confusion_matrix` | rows = true, columns = predicted |
+| Confusion matrix (row-normalised) | row sums | per-class recall on the diagonal |
+
+Supporting helpers:
+
+- `top_k_accuracy()` validates that the probability array is 2-D and that `k ≥ 1`, clipping `k` to the number of classes.
+- `sparse_categorical_crossentropy_loss()` clips probabilities at `1e-7` before taking the log, so a zero probability for the true class yields a large finite penalty instead of `inf`.
+- `format_confusion_matrix_counts()` renders the matrix as a width-aligned text block, so it stays readable in the console where a plot is not wanted.
+
+### Inference output
+
+Section 11 classifies one image — either from a file (`load_image_batch`, which accepts `.jpg`, `.jpeg`, `.png`, `.bmp`, `.gif`, `.webp` and resizes to 32×32) or from the test set by index (`load_sample_batch`, which also returns the ground-truth label). A `.npz` of raw labels, predictions and probabilities is written alongside the figures, so predictions can be re-analysed later without re-running the model:
+
+```python
+stored = np.load("artifacts/reports/cifar10_cnn_predictions.npz")
+print(stored.files)                 # ['labels', 'predictions', 'probabilities']
+```
+
+`rank_predictions()` returns the top-k `(class_name, probability)` pairs, and the result dictionary reports the source, the winning class, its confidence, the ranked top-k and (when known) the true label.
+
+---
+
+## Output Artifacts
+
+Everything the pipeline produces lands under `artifacts/`, with filenames derived from `CONFIG.run_name` so multiple experiments can coexist simply by changing that value. The directory is created on demand by `ensure_directories()`.
+
+```
+artifacts/
+├── models/
+│   └── cifar10_cnn.keras                              # best checkpoint (by val accuracy)
+├── logs/
+│   └── cifar10_cnn.csv                                # per-epoch loss / accuracy / LR
+└── reports/
+    ├── cifar10_cnn_config.json                        # the exact TrainConfig of the run
+    ├── cifar10_cnn_history.json                       # per-epoch history + run summary
+    ├── cifar10_cnn_metrics.json                       # summary metrics + confusion matrix
+    ├── cifar10_cnn_predictions.npz                    # labels, predictions, probabilities
+    ├── cifar10_cnn_training_curves.png
+    ├── cifar10_cnn_confusion_matrix.png
+    ├── cifar10_cnn_confusion_matrix_normalized.png
+    ├── cifar10_cnn_per_class_accuracy.png
+    └── cifar10_cnn_sample_predictions.png
+```
+
+`artifacts/` is listed in `.gitignore`: the checkpoint and figures are large binaries that are regenerated by a training run. The published figures in this README are committed separately under `docs/images/` so the results are visible without cloning and training.
 
 ---
 
@@ -161,345 +335,201 @@ Augmentation is implemented with Keras preprocessing layers inside the training 
 
 ```
 cnn-object-recognition/
-├── cifar10_cnn/                 # the installable package
-│   ├── __init__.py              # public re-exports (config surface)
-│   ├── config.py                # paths, CLASS_NAMES, TrainConfig — single source of truth
-│   ├── seeding.py               # global RNG seeding
-│   ├── runtime.py               # UTF-8 console + GPU memory growth
-│   ├── data.py                  # CIFAR-10 load, split, tf.data pipelines
-│   ├── augmentation.py          # RandomFlip / Translation / Rotation / Zoom stack
-│   ├── model.py                 # CNN architecture, compile, count_parameters
-│   ├── callbacks.py             # checkpoint / early-stop / LR schedule / CSV / NaN
-│   ├── metrics.py               # TF-free metrics (top-k, CE loss, confusion, summary)
-│   ├── plots.py                 # matplotlib / seaborn report figures
-│   ├── train.py                 # training entry point   → python -m cifar10_cnn.train
-│   ├── evaluate.py              # evaluation entry point → python -m cifar10_cnn.evaluate
-│   └── predict.py               # inference entry point  → python -m cifar10_cnn.predict
-├── tests/                       # pytest suite (68 tests)
-├── artifacts/                   # generated outputs (git-ignored)
-│   ├── models/                  # <run_name>.keras — best checkpoint
-│   ├── reports/                 # figures, JSON metrics, history, raw predictions
-│   └── logs/                    # <run_name>.csv — per-epoch log
-├── conftest.py                  # puts the project root on sys.path for pytest
-├── requirements.txt             # pinned dependency set
-├── CNN Object Detection.ipynb   # self-contained notebook version of the pipeline
-└── README.md
+├── CNN Object Detection.ipynb    # The whole pipeline: config → data → model → train → evaluate → predict
+├── README.md                     # This file
+├── requirements.txt              # Pinned dependency ranges
+├── conftest.py                   # Puts the project root on sys.path for pytest runs
+├── .gitignore                    # Excludes caches, virtualenvs and generated artifacts
+├── docs/
+│   └── images/                   # Report figures committed for the README
+└── artifacts/                    # Generated by a training run (git-ignored)
+    ├── logs/
+    ├── models/
+    └── reports/
 ```
+
+There is no importable Python package to install: the notebook is self-contained by design, and every function it uses is defined in the notebook itself. `conftest.py` exists only so that a `pytest` invocation from the repository root resolves imports against the project root rather than a `tests/` subdirectory.
 
 ---
 
-## Installation
+## Getting Started
 
-**Requirements:** Python 3.9–3.11 and TensorFlow 2.13–2.16 (developed and verified on **Python 3.11.5 / TensorFlow 2.15.0**).
-
-### 1. Clone
+### 1. Clone the repository
 
 ```bash
-git clone https://github.com/<your-username>/cifar10-cnn.git
-cd cifar10-cnn
+git clone https://github.com/<your-username>/cnn-object-recognition.git
+cd cnn-object-recognition
 ```
 
-### 2. Create a virtual environment (recommended)
+### 2. Create an environment (recommended)
+
+```bash
+conda create -n cifar10 python=3.10 -y
+conda activate cifar10
+```
+
+or with plain `venv`:
 
 ```bash
 python -m venv .venv
-
-# Windows (PowerShell)
-.venv\Scripts\Activate.ps1
-
-# macOS / Linux
-source .venv/bin/activate
+.venv\Scripts\activate          # Windows
+source .venv/bin/activate       # macOS / Linux
 ```
 
 ### 3. Install dependencies
+
+Either install from the pinned requirements file:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Or, with conda:
+or use the conda one-liner from the notebook header:
 
 ```bash
-conda install -c conda-forge tensorflow numpy pandas scikit-learn matplotlib seaborn pytest
+conda install -c conda-forge tensorflow numpy pandas scikit-learn matplotlib seaborn jupyter
 ```
 
-The package itself needs no installation step — it is imported from the repository root. (If you prefer, `pip install -e .` once a packaging file is added.)
+**Dependencies**
 
-> **Note on TensorFlow 2.15:** importing TensorFlow prints oneDNN and deprecation warnings. These are benign and expected; the test suite runs with one unrelated third-party Jupyter `DeprecationWarning`.
+| Package | Version range | Role |
+| ------- | ------------- | ---- |
+| `tensorflow` | `>=2.13,<2.17` | Model, training, `tf.data` |
+| `numpy` | `>=1.23,<2.0` | Array maths, NumPy metrics |
+| `pandas` | `>=1.5` | History table rendering |
+| `scikit-learn` | `>=1.2` | Classification report, confusion matrix |
+| `matplotlib` | `>=3.6` | All figures |
+| `seaborn` | `>=0.12` | Confusion-matrix heatmaps, palettes |
+| `jupyter` | `>=1.0` | Running the notebook |
+| `pytest` | `>=7.0` | Test runner |
 
----
-
-## Quick Start
-
-Run a fast smoke test first — it exercises the entire pipeline in a couple of minutes on CPU (2 epochs over a 2,000-image subset) and confirms every artifact is produced before you commit to a long run:
+### 4. Launch Jupyter
 
 ```bash
-python -m cifar10_cnn.train --quick
-python -m cifar10_cnn.evaluate --quick
-python -m cifar10_cnn.predict --index 7 --top-k 5
+jupyter notebook
 ```
 
-Then run the full job:
+Open `CNN Object Detection.ipynb` and run the cells in order.
 
-```bash
-python -m cifar10_cnn.train --epochs 60 --batch-size 64
-python -m cifar10_cnn.evaluate
-```
+> **Note on TensorFlow 2.15.** On import you will see oneDNN / deprecation warnings. These are benign and expected — the notebook calls this out explicitly in section 1.
 
 ---
 
 ## Usage
 
-### Command line
+The notebook is designed to run top to bottom. Sections 1–6 are cheap; section 7 trains.
 
-Every stage is a runnable module.
+### Smoke test first
 
-#### Train
-
-```bash
-python -m cifar10_cnn.train [options]
-```
-
-| Flag | Default | Description |
-|---|---|---|
-| `--epochs` | `60` | Number of epochs. |
-| `--batch-size` | `64` | Batch size. |
-| `--learning-rate` | `1e-3` | Adam learning rate. |
-| `--seed` | `42` | Global random seed. |
-| `--validation-split` | `0.1` | Fraction of the training set held out for validation. |
-| `--run-name` | `cifar10_cnn` | Names every artifact produced by the run. |
-| `--no-augmentation` | off | Disable all augmentation (baseline ablation). |
-| `--quick` | off | Smoke test: 2 epochs on a 2,000-image subset. |
-
-#### Evaluate
-
-```bash
-python -m cifar10_cnn.evaluate [options]
-```
-
-| Flag | Default | Description |
-|---|---|---|
-| `--run-name` | `cifar10_cnn` | Which run's checkpoint to evaluate. |
-| `--batch-size` | `64` | Inference batch size. |
-| `--model-path` | — | Explicit checkpoint path, overriding `--run-name`. |
-| `--quick` | off | Evaluate on the 2,000-image smoke-test subset. |
-
-Evaluate loads the best checkpoint, scores the untouched test set, prints a full report, and writes every figure and metric.
-
-#### Predict
-
-```bash
-python -m cifar10_cnn.predict [options]
-```
-
-| Flag | Default | Description |
-|---|---|---|
-| `--image` | — | Path to an image file (JPG / JPEG / PNG / BMP / GIF / WEBP). |
-| `--index` | — | CIFAR-10 test-set index to classify instead of a file. |
-| `--top-k` | `3` | How many ranked predictions to show. |
-| `--run-name` | `cifar10_cnn` | Which run's checkpoint to load. |
-| `--model-path` | — | Explicit checkpoint path, overriding `--run-name`. |
-
-Provide **exactly one** of `--image` or `--index`. An image file is resized to 32×32 automatically.
-
-```bash
-# Classify a sample straight out of the CIFAR-10 test set
-python -m cifar10_cnn.predict --index 7 --top-k 5
-
-# Classify any image on disk
-python -m cifar10_cnn.predict --image path/to/your/image.jpg
-```
-
-### Python API
-
-Each stage is a plain function you can call from your own code.
+Before committing to a full run, flip the flag in section 2 (or the cell in section 7.1) to verify the whole pipeline and every artifact:
 
 ```python
-from cifar10_cnn.config import TrainConfig
-from cifar10_cnn.train import train
-from cifar10_cnn.evaluate import run_evaluation
-from cifar10_cnn.predict import run_prediction
-
-config = TrainConfig(epochs=60, batch_size=64, run_name="my_run")
-
-report = train(config)                 # writes artifacts/models/my_run.keras
-evaluation = run_evaluation(config)    # metrics + figures under artifacts/reports/
-result = run_prediction(config, image_path=None, index=7, top_k=5)
+CONFIG.quick_run = True     # 2 epochs on a 2,000-image subset — a couple of minutes on CPU
 ```
 
-Build the model without training, for inspection or custom loops:
+Leave it `False` for the full 60-epoch run that produced the results above.
+
+### Full training run
 
 ```python
-from cifar10_cnn.model import build_model, count_parameters
-from cifar10_cnn.config import TrainConfig
-
-model = build_model(TrainConfig())
-print(count_parameters(model))         # {'trainable': 814826, 'non_trainable': 1408, 'total': 816234}
+report = train(CONFIG)
 ```
 
-### Notebook
+`train()` seeds the run, prints the device, builds the datasets and the model, fits with all callbacks, saves the training-curve figure, writes `<run_name>_config.json` and `<run_name>_history.json`, and returns a summary dict:
 
-`CNN Object Detection.ipynb` is a **self-contained** version of the entire pipeline — it does not import the `cifar10_cnn` package and can be run top to bottom in Jupyter or Anaconda. It is useful for interactive exploration.
-
-```bash
-jupyter notebook "CNN Object Detection.ipynb"
+```python
+{
+    "run_name": "cifar10_cnn",
+    "seed": 42,
+    "device": "CPU only (no GPU detected)",
+    "epochs_completed": 60,
+    "best_epoch": 60,
+    "best_val_accuracy": 0.8248,
+    "final_train_accuracy": 0.8117,
+    "duration_seconds": ...,
+    "parameters": {"trainable": ..., "non_trainable": ..., "total": ...},
+    ...
+}
 ```
 
-Set `CONFIG.quick_run = True` in section 7.1 for a smoke test before the full run.
+### Evaluation
 
----
+Section 10.1 requires a trained checkpoint:
 
-## Output Artifacts
-
-Everything a run produces lands under `artifacts/` (git-ignored), namespaced by `run_name`:
-
-| Path | Contents |
-|---|---|
-| `models/<run_name>.keras` | Best checkpoint, selected by validation accuracy. |
-| `reports/<run_name>_history.json` | Full per-epoch history plus a run summary. |
-| `reports/<run_name>_config.json` | The exact serialised `TrainConfig` for the run. |
-| `reports/<run_name>_metrics.json` | All evaluation numbers, including the confusion matrix. |
-| `reports/<run_name>_predictions.npz` | Raw `labels`, `predictions` and `probabilities` arrays. |
-| `reports/<run_name>_training_curves.png` | Loss and accuracy curves (train vs validation). |
-| `reports/<run_name>_confusion_matrix.png` | Confusion matrix (counts). |
-| `reports/<run_name>_confusion_matrix_normalized.png` | Row-normalised confusion matrix. |
-| `reports/<run_name>_per_class_accuracy.png` | Recall per class. |
-| `reports/<run_name>_sample_predictions.png` | Grid of labelled test predictions. |
-| `logs/<run_name>.csv` | Per-epoch CSV log written by `CSVLogger`. |
-
-Raw predictions are persisted to `.npz`, so the analysis can be revisited later without re-running the model.
-
----
-
-## Configuration Reference
-
-All tunables live on `cifar10_cnn/config.py::TrainConfig`, a dataclass with defaults tuned for CPU-only training.
-
-| Field | Default | Description |
-|---|---|---|
-| `seed` | `42` | Seeds Python, NumPy and TensorFlow. |
-| `batch_size` | `64` | Training batch size. |
-| `epochs` | `60` | Maximum epochs (early stopping may cut this short). |
-| `learning_rate` | `1e-3` | Initial Adam learning rate. |
-| `validation_split` | `0.1` | Fraction held out from the training split. |
-| `shuffle_buffer` | `10_000` | `tf.data` shuffle buffer size. |
-| `conv_filters` | `(32, 64, 128)` | Filters per convolutional stage. |
-| `conv_blocks_per_stage` | `2` | `Conv→BN→ReLU` blocks per stage. |
-| `dense_units` | `256` | Units in the dense head. |
-| `dropout_conv` | `(0.20, 0.30, 0.40)` | Dropout per convolutional stage. |
-| `dropout_dense` | `0.50` | Dropout before the output layer. |
-| `weight_decay` | `1e-4` | L2 regularisation strength. |
-| `use_augmentation` | `True` | Master switch for augmentation. |
-| `flip_horizontal` | `True` | Random horizontal flip. |
-| `translation` | `0.125` | Random translation factor. |
-| `rotation` | `0.10` | Random rotation factor. |
-| `zoom` | `0.10` | Random zoom factor. |
-| `early_stopping_patience` | `15` | Patience for `EarlyStopping`. |
-| `reduce_lr_patience` | `5` | Patience for `ReduceLROnPlateau`. |
-| `reduce_lr_factor` | `0.5` | LR multiplier on plateau. |
-| `min_learning_rate` | `1e-6` | Floor for the LR schedule. |
-| `quick_run` | `False` | 2 epochs on a 2,000-image subset. |
-| `run_name` | `cifar10_cnn` | Namespace for every artifact. |
-| `tags` | `{}` | Free-form metadata, serialised with the config. |
-
-Changing `run_name` keeps multiple experiments side by side, since every artifact name derives from it.
-
----
-
-## Testing
-
-A pytest suite of **68 tests** covers every unit-testable module; the training/evaluation flows themselves are exercised end to end through the CLI.
-
-```bash
-python -m pytest -q
-# 68 passed, 1 warning
+```python
+evaluation = run_evaluation(CONFIG)
+evaluation["summary"]["accuracy"], evaluation["summary"]["top_3_accuracy"]
+# (0.8241, 0.9643)
 ```
 
-Run a single module:
+This writes all four figures, `cifar10_cnn_metrics.json` and `cifar10_cnn_predictions.npz`, and prints a per-class table plus the confusion matrix to the console.
 
-```bash
-python -m pytest tests/test_metrics.py -q
+### Classify a single image
+
+By test-set index (change `SAMPLE_INDEX` to any value in `[0, 9999]`):
+
+```python
+SAMPLE_INDEX = 7
+example = run_prediction(CONFIG, index=SAMPLE_INDEX, top_k=5)
 ```
 
-| Test file | Module under test |
-|---|---|
-| `tests/test_config.py` | `config.py` — paths, defaults, serialisation |
-| `tests/test_data.py` | `data.py` — normalisation, splitting, `tf.data` pipelines |
-| `tests/test_model.py` | `model.py` — shapes, layers, parameter counts |
-| `tests/test_metrics.py` | `metrics.py` — TF-free metric helpers |
-| `tests/test_augmentation.py` | `augmentation.py` — layer stack and activation logic |
-| `tests/test_callbacks.py` | `callbacks.py` — callback types and monitors |
-| `tests/test_plots.py` | `plots.py` — writes real PNGs to a temp path |
-| `tests/test_predict.py` | `predict.py` — ranking and input validation |
-| `tests/test_seeding.py` | `seeding.py` — reproducibility |
-| `tests/test_runtime.py` | `runtime.py` — device and console setup |
+Or from a file on disk (resized to 32×32 automatically):
 
-The single warning is a third-party Jupyter `DeprecationWarning`, unrelated to this project.
+```python
+IMAGE_PATH = r"C:\path\to\your\image.jpg"
+file_example = run_prediction(CONFIG, image_path=IMAGE_PATH, top_k=5)
+```
+
+Both return a dictionary with the source, the predicted class, its confidence, the ranked top-k and the true label when one is known.
+
+### Reload the model yourself
+
+```python
+model = tf.keras.models.load_model("artifacts/models/cifar10_cnn.keras", compile=False)
+probabilities = model.predict(image_batch, verbose=0)   # (1, 10)
+```
+
+`compile=False` is the notebook's own choice at evaluation time — only the forward pass is needed there.
 
 ---
 
 ## Reproducibility
 
-`set_global_seed(seed)` seeds `PYTHONHASHSEED`, Python's `random`, NumPy, and TensorFlow, and sets `TF_DETERMINISTIC_OPS=1`. The complete `TrainConfig` is written to `reports/<run_name>_config.json` for every run, so any result can be traced back to the exact settings that produced it.
-
-Full bit-for-bit determinism on GPU additionally requires disabling cuDNN autotuning, which costs performance — seeding the standard generators is enough to make runs comparable across attempts.
-
----
-
-## Results
-
-> **No measured results are committed to this repository yet.** The `artifacts/` directory is git-ignored, and no trained checkpoint or numbers are published.
-
-To record your own results, run the pipeline and paste the figures and numbers in:
-
-```bash
-python -m cifar10_cnn.train --epochs 60
-python -m cifar10_cnn.evaluate
-```
-
-Then report the metrics printed by `evaluate` (top-3 accuracy, macro/weighted F1, per-class recall) and reference the generated figures:
-
-```markdown
-| Metric           | Value |
-|------------------|-------|
-| Test accuracy    | _your value_ |
-| Top-3 accuracy   | _your value_ |
-| Macro F1         | _your value_ |
-| Weighted F1      | _your value_ |
-| Epochs trained   | _your value_ |
-| Training hardware| _your value_ |
-
-![Training history](artifacts/reports/cifar10_cnn_training_curves.png)
-![Confusion matrix](artifacts/reports/cifar10_cnn_confusion_matrix.png)
-```
-
-For context, a from-scratch CNN of this depth typically lands in the **low-to-mid 80s percent** on CIFAR-10 with augmentation — but do not publish a figure you have not measured yourself.
+- **Seeding.** `set_global_seed(CONFIG.seed)` seeds Python (`random`), NumPy and TensorFlow, and sets `PYTHONHASHSEED` and `TF_DETERMINISTIC_OPS`. The validation split uses `np.random.default_rng(seed)`, so the same 5,000 images are held out on every run with the same seed.
+- **Honest caveat on determinism.** Exact bit-for-bit reproducibility on GPU additionally requires disabling cuDNN autotuning, which costs performance. Seeding the standard generators makes runs *comparable* across attempts; it does not guarantee identical weights. The notebook states this explicitly rather than pretending otherwise.
+- **Self-describing runs.** Each run writes its own `*_config.json`, so any published metric can be traced back to the exact configuration that produced it.
+- **Switching runs.** Change `CONFIG.run_name` to keep multiple configurations side by side — every artifact filename is derived from it, so nothing is overwritten.
 
 ---
 
-## Design Notes
+## Notes and Next Steps
 
-- **Framing.** The input pipeline is split so that pure logic (`normalize_images`, `split_train_validation`) is unit-testable without network access or a GPU. Augmentation is a first-class module, not inlined into the training loop.
-- **Metrics without TensorFlow.** `metrics.py` deliberately avoids importing TensorFlow so evaluation logic can be tested against plain NumPy arrays. This matters because evaluation loads the model with `compile=False` (only the forward pass is needed, and it avoids failures on missing optimizers or legacy configs).
-- **Two monitors.** Checkpointing uses validation *accuracy* (the metric we care about); early stopping and the LR schedule use validation *loss* (a smoother signal, so those decisions are less noisy).
-- **Memory.** Images are cached as `uint8` (~150 MB for the full training set) and only converted to `float32` per batch, which keeps the dataset in RAM without the 4× blow-up of caching float data.
-- **Runtime setup.** `runtime.py` forces the console to UTF-8 so Keras' box-drawing characters in `model.summary()` never raise `UnicodeEncodeError` on Windows, and enables incremental GPU memory growth when a GPU is present.
+### Operational notes
+
+- **CPU vs GPU.** The default `TrainConfig` is tuned for CPU-only training: 60 epochs at batch size 64. On a GPU the same settings finish far sooner, and `batch_size` and `epochs` can be raised.
+- **Where results land.** See [Output Artifacts](#output-artifacts). Everything is under `artifacts/`.
+- **Augmentation ablation.** Set `CONFIG.use_augmentation = False` to reproduce a no-augmentation baseline against the same splits.
+- **Reproducing a clean run.** Delete `artifacts/` before a fresh run if you want to be certain no stale checkpoint is picked up — `run_evaluation()` raises `FileNotFoundError` with a clear message when no checkpoint exists.
+
+### Where the remaining error is
+
+The confusion matrices show the model is already strong on rigid, distinctive classes and that nearly all of its residual error is concentrated in the fine-grained natural classes — `cat`, `dog`, `bird`, `deer` — and in the consistent `cat ↔ dog` / `animal → frog` pairs. Improvements should therefore target those classes rather than the architecture wholesale.
+
+### Plausible next steps
+
+- **Higher input resolution** (upsampled or via `RandomResizedCrop`-style preprocessing) to give fine-grained classes more pixels to work with.
+- **Cutout / random erasing** on top of the existing geometric augmentation — a cheap, well-established accuracy gain on CIFAR-10, and an easy addition to the existing `tf.keras.Sequential` stack.
+- **Stochastic depth or residual connections** to allow a deeper backbone without the degradation that a plain deep stack suffers.
+- **MixUp / label smoothing** to soften the confident wrong predictions that show up as off-diagonal mass in the confusion matrix.
+- **Test-time augmentation** (average predictions over flips) for a small, essentially free accuracy bump at inference.
+- **Class-balanced sampling or focal loss** if the `frog` precision / `cat`+`dog` recall asymmetry is worth trading for.
+- **A proper `tests/` suite** around the TensorFlow-free helpers in section 8 (`top_k_accuracy`, `sparse_categorical_crossentropy_loss`, `split_train_validation` boundary conditions) — they are pure NumPy and trivially unit-testable; `pytest` is already in `requirements.txt` and `conftest.py` already handles the import path.
 
 ---
 
-## Roadmap
+## Acknowledgements
 
-Ideas for extending the project, roughly in order of value:
-
-- [ ] Publish measured results and commit the confusion-matrix figure.
-- [ ] Add an end-to-end smoke test (opt-in marker) that runs `--quick` and asserts the artifacts appear.
-- [ ] Add CLI argument-parsing tests (`train.parse_args`, `evaluate.parse_args`).
-- [ ] Add `pyproject.toml` / `pytest.ini` to centralise tooling config and register `slow` / `network` markers.
-- [ ] Explore deeper or residual architectures, mixup/cutmix augmentation, and cosine LR schedules.
-- [ ] Add a `--no-augmentation` vs. augmented comparison table to the Results section.
-
----
-
-## License
-
-No license file is currently included. Add one (e.g. the MIT License) before distributing, or specify the terms explicitly.
+- **CIFAR-10** — Alex Krizhevsky, *Learning Multiple Layers of Features from Tiny Images* (2009); distributed by the University of Toronto and loaded here via `tf.keras.datasets.cifar10`.
+- **TensorFlow / Keras** — model, `tf.data` pipeline, preprocessing layers and callbacks.
+- **scikit-learn** — classification report and confusion matrix.
+- **seaborn** and **matplotlib** — all report figures.
