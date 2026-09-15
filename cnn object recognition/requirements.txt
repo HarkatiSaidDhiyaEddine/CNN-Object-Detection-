@@ -1,0 +1,19 @@
+# Core deep learning stack
+tensorflow>=2.13,<2.17
+
+# Scientific computing
+numpy>=1.23,<2.0
+pandas>=1.5
+
+# Metrics and reporting
+scikit-learn>=1.2
+
+# Plotting
+matplotlib>=3.6
+seaborn>=0.12
+
+# Notebook / interactive exploration
+jupyter>=1.0
+
+# Testing
+pytest>=7.0

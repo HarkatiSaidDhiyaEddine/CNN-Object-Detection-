@@ -1,0 +1,203 @@
+{
+  "run_name": "cifar10_cnn",
+  "model_path": "C:\\Users\\car info\\Desktop\\proj git\\cnn object recognition\\artifacts\\models\\cifar10_cnn.keras",
+  "summary": {
+    "accuracy": 0.8241,
+    "top_3_accuracy": 0.9643,
+    "macro_f1": 0.8212086149654029,
+    "weighted_f1": 0.8212086149654029,
+    "per_class": {
+      "airplane": {
+        "precision": 0.8331716779825412,
+        "recall": 0.859,
+        "f1_score": 0.8458887247661251,
+        "support": 1000
+      },
+      "automobile": {
+        "precision": 0.9055343511450382,
+        "recall": 0.949,
+        "f1_score": 0.9267578125,
+        "support": 1000
+      },
+      "bird": {
+        "precision": 0.8533653846153846,
+        "recall": 0.71,
+        "f1_score": 0.7751091703056768,
+        "support": 1000
+      },
+      "cat": {
+        "precision": 0.7696897374701671,
+        "recall": 0.645,
+        "f1_score": 0.7018498367791077,
+        "support": 1000
+      },
+      "deer": {
+        "precision": 0.8680800942285041,
+        "recall": 0.737,
+        "f1_score": 0.7971876690102758,
+        "support": 1000
+      },
+      "dog": {
+        "precision": 0.8433121019108281,
+        "recall": 0.662,
+        "f1_score": 0.7417366946778712,
+        "support": 1000
+      },
+      "frog": {
+        "precision": 0.692079940784604,
+        "recall": 0.935,
+        "f1_score": 0.7954062101233518,
+        "support": 1000
+      },
+      "horse": {
+        "precision": 0.8053571428571429,
+        "recall": 0.902,
+        "f1_score": 0.8509433962264151,
+        "support": 1000
+      },
+      "ship": {
+        "precision": 0.8693181818181818,
+        "recall": 0.918,
+        "f1_score": 0.8929961089494164,
+        "support": 1000
+      },
+      "truck": {
+        "precision": 0.8477064220183487,
+        "recall": 0.924,
+        "f1_score": 0.8842105263157894,
+        "support": 1000
+      }
+    },
+    "num_samples": 10000,
+    "cross_entropy": 0.5142757296562195
+  },
+  "confusion_matrix": [
+    [
+      859,
+      17,
+      24,
+      6,
+      5,
+      0,
+      4,
+      13,
+      46,
+      26
+    ],
+    [
+      4,
+      949,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      8,
+      38
+    ],
+    [
+      52,
+      5,
+      710,
+      27,
+      33,
+      17,
+      104,
+      24,
+      9,
+      19
+    ],
+    [
+      20,
+      12,
+      31,
+      645,
+      20,
+      78,
+      97,
+      37,
+      31,
+      29
+    ],
+    [
+      10,
+      2,
+      31,
+      32,
+      737,
+      11,
+      108,
+      55,
+      9,
+      5
+    ],
+    [
+      6,
+      6,
+      19,
+      105,
+      24,
+      662,
+      73,
+      79,
+      7,
+      19
+    ],
+    [
+      7,
+      5,
+      7,
+      13,
+      7,
+      5,
+      935,
+      6,
+      13,
+      2
+    ],
+    [
+      7,
+      5,
+      6,
+      9,
+      21,
+      11,
+      25,
+      902,
+      5,
+      9
+    ],
+    [
+      43,
+      11,
+      3,
+      0,
+      2,
+      0,
+      2,
+      2,
+      918,
+      19
+    ],
+    [
+      23,
+      36,
+      1,
+      1,
+      0,
+      1,
+      2,
+      2,
+      10,
+      924
+    ]
+  ],
+  "figures": {
+    "confusion_matrix": "C:\\Users\\car info\\Desktop\\proj git\\cnn object recognition\\artifacts\\reports\\cifar10_cnn_confusion_matrix.png",
+    "confusion_matrix_normalized": "C:\\Users\\car info\\Desktop\\proj git\\cnn object recognition\\artifacts\\reports\\cifar10_cnn_confusion_matrix_normalized.png",
+    "per_class_accuracy": "C:\\Users\\car info\\Desktop\\proj git\\cnn object recognition\\artifacts\\reports\\cifar10_cnn_per_class_accuracy.png",
+    "sample_predictions": "C:\\Users\\car info\\Desktop\\proj git\\cnn object recognition\\artifacts\\reports\\cifar10_cnn_sample_predictions.png"
+  },
+  "predictions_path": "C:\\Users\\car info\\Desktop\\proj git\\cnn object recognition\\artifacts\\reports\\cifar10_cnn_predictions.npz"
+}
